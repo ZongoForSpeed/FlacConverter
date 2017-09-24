@@ -1,3 +1,4 @@
+import argparse
 import coloredlogs
 import logging
 import os
@@ -5,7 +6,6 @@ import shutil
 import subprocess
 import mutagen.flac
 import mutagen.easyid3
-import sys
 
 
 def create_output(d, version):
@@ -41,7 +41,7 @@ def null_value(value, default):
 
 def convert(i, o, format):
     flac_command = ['flac', '-c', '-d', i]
-    logging.info('Convertion flac %s ...', flac_command)
+    logging.info('Conversion flac %s ...', flac_command)
     process = subprocess.Popen(flac_command, stdout=subprocess.PIPE)
 
     lame_command = ['lame', '-m', 'j', '-q', '0', '--vbr-new', '-V', '0', '-', o]
@@ -49,18 +49,62 @@ def convert(i, o, format):
         lame_command = ['lame', '-m', 'j', '-q', '0', '-b', '320', '-', o]
 
     logging.debug('... to %s', lame_command)
-    output = subprocess.check_output(lame_command, stdin=process.stdout)
+    output = subprocess.Popen(lame_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=process.stdout)
+    stdout, stderr = output.communicate()
+    if stdout:
+        logging.debug(stdout)
+    if stderr:
+        logging.debug(stderr)
+
     process.wait()
 
     tags = read_tags(i)
     write_tags(o, tags)
 
 
-def main(arguments):
-    version = 'V0 (VBR)'
-    tracker = 'https://flacsfor.me/XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX/announce'
-    directories = arguments[1:]
+def main():
+    # Parsing arguments
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-D', '--debug', help='increase output verbosity', action="store_true")
+    parser.add_argument('directories', nargs='*', help='directories to convert')
+
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument('--V0', help='convert input in mp3 V0 (VBR)', action="store_true")
+    group.add_argument('--MP3', help='convert input in mp3 320 kbps', action="store_true")
+    group.add_argument('--ALL', help='convert input in both V0 and 320 formats', action="store_true")
+
+    parser.add_argument('-t', '--tracker', help="tracker to use in torrent", type=str)
+
+    arguments = parser.parse_args()
+
+    if arguments.debug:
+        coloredlogs.install(level='DEBUG', fmt='%(levelname)s\t%(message)s')
+        logging.info('Verbosity turned on')
+    else:
+        coloredlogs.install(level='INFO', fmt='%(levelname)s\t%(message)s')
+        logging.info('Verbosity turned off')
+    # logging.basicConfig(format='%(levelname)s\t%(message)s', level=logging.DEBUG)
+
+    versions = []
+    if arguments.V0:
+        versions.append('V0 (VBR)')
+    elif arguments.MP3:
+        versions.append('320')
+    else:
+        versions.append('V0 (VBR)')
+        versions.append('320')
+
+    if arguments.tracker:
+        tracker = arguments.tracker
+        logging.debug('Using tracker %s', tracker)
+    else:
+        import Secret
+        tracker = Secret.tracker
+        logging.debug('Using tracker %s', tracker)
+
+    directories = arguments.directories
     logging.debug('Directories %s ...', directories)
+
     for d in directories:
         d = os.path.abspath(d)
         if not os.path.isdir(d):
@@ -68,43 +112,54 @@ def main(arguments):
             continue
 
         root, d = os.path.split(d)
-        logging.debug('%s, %s', root, d)
         input_directory = os.path.join(root, d)
-        output_directory = os.path.join(root, create_output(d, version))
-        if not os.path.isdir(output_directory):
-            logging.debug('Creating directory %s ...', output_directory)
-            os.makedirs(output_directory)
-        music_files = []
-        for (dirpath, dirnames, filenames) in os.walk(input_directory):
-            logging.debug('dirpath=%s, dirnames=%s, filenames=%s', dirpath, dirnames, filenames)
-            for f in filenames:
-                source = os.path.join(dirpath, f)
-                destination = os.path.join(output_directory, os.path.relpath(source, input_directory))
-                ext = os.path.splitext(source)[1]
-                if ext.lower() in ['.flac']:
-                    base = os.path.splitext(destination)[0]
-                    destination = base + '.mp3'
-                    logging.debug('convert(%s, %s)', source, destination)
-                    convert(source, destination, version)
-                    music_files.append(os.path.relpath(destination, output_directory))
-                elif ext.lower() in ['.jpeg', '.jpg', '.png']:
-                    logging.debug('shutil.copyfile(%s, %s)', source, destination)
-                    shutil.copyfile(source, destination)
-        music_files.sort()
+        for version in versions:
+            output_directory = os.path.join(root, create_output(d, version))
+            if not os.path.isdir(output_directory):
+                logging.debug('Creating directory %s ...', output_directory)
+                os.makedirs(output_directory)
 
-        playlist = os.path.join(output_directory, os.path.basename(output_directory) + '.m3u')
-        logging.debug('Creating playlist file %s ...', playlist)
-        with open(playlist, 'w') as f:
-            for music_file in music_files:
-                f.write(music_file)
-                f.write('\n')
+            music_files = []
+            for (dirpath, dirnames, filenames) in os.walk(input_directory):
+                for f in filenames:
+                    source = os.path.join(dirpath, f)
+                    destination = os.path.join(output_directory, os.path.relpath(source, input_directory))
 
-        command = ['ctorrent', '-t', '-p', '-u', tracker, '-s', output_directory + '.torrent', output_directory]
-        logging.debug('Creating torrent file %s ...', command)
-        subprocess.call(command)
+                    dirname = os.path.dirname(destination)
+                    if not os.path.isdir(dirname):
+                        logging.debug('Creating directory %s ...', output_directory)
+                        os.makedirs(output_directory)
+
+                    ext = os.path.splitext(source)[1]
+                    if ext.lower() in ['.flac']:
+                        base = os.path.splitext(destination)[0]
+                        destination = base + '.mp3'
+                        logging.debug('Convert(%s, %s, %s)', source, destination, version)
+                        convert(source, destination, version)
+                        music_files.append(os.path.relpath(destination, output_directory))
+                    elif ext.lower() in ['.jpeg', '.jpg', '.png']:
+                        logging.debug('shutil.copyfile(%s, %s)', source, destination)
+                        shutil.copyfile(source, destination)
+            music_files.sort()
+
+            playlist = os.path.join(output_directory, os.path.basename(output_directory) + '.m3u')
+            logging.debug('Creating playlist file %s ...', playlist)
+            with open(playlist, 'w') as f:
+                for music_file in music_files:
+                    f.write(music_file)
+                    f.write('\n')
+
+            command = ['ctorrent', '-t', '-p', '-u', tracker, '-s', output_directory + '.torrent', output_directory]
+            logging.info('Creating torrent file %s ...', command)
+            output = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            stdout, stderr = output.communicate()
+            if stdout:
+                logging.debug(stdout)
+            if stderr:
+                logging.error(stderr)
+
+            output.wait()
 
 
 if __name__ == '__main__':
-    coloredlogs.install(level='DEBUG', fmt='%(levelname)s\t%(message)s')
-    # logging.basicConfig(format='%(levelname)s\t%(message)s', level=logging.DEBUG)
-    main(sys.argv)
+    main()
