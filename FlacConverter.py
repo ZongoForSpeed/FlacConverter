@@ -27,7 +27,8 @@ def write_tags(filename, tags):
     # meta = mutagen.easyid3.EasyID3(filename)
     meta.add_tags()
     for tag, value in tags.iteritems():
-        meta[tag] = value
+        if tag in ["album", "composer", "genre", "date", "lyricist", "title", "version", "artist", "tracknumber"]:
+            meta[tag] = value
     meta.save()
     logging.debug('with tags %s', meta.tags)
 
@@ -77,11 +78,22 @@ def main():
 
     arguments = parser.parse_args()
 
+    level_styles = {'info': {'color': 'green'},
+                    'notice': {'color': 'magenta'},
+                    'verbose': {'color': 'blue'},
+                    'success': {'color': 'green', 'bold': True},
+                    'spam': {'color': 'blue'},
+                    'critical': {'color': 'red', 'bold': True},
+                    'error': {'color': 'red'},
+                    'debug': {'color': 'blue'},
+                    'warning': {'color': 'yellow'}
+                    }
+
     if arguments.debug:
-        coloredlogs.install(level='DEBUG', fmt='%(levelname)s\t%(message)s')
+        coloredlogs.install(level='DEBUG', fmt='%(levelname)s\t%(message)s', level_styles=level_styles)
         logging.info('Verbosity turned on')
     else:
-        coloredlogs.install(level='INFO', fmt='%(levelname)s\t%(message)s')
+        coloredlogs.install(level='INFO', fmt='%(levelname)s\t%(message)s', level_styles=level_styles)
         logging.info('Verbosity turned off')
     # logging.basicConfig(format='%(levelname)s\t%(message)s', level=logging.DEBUG)
 
@@ -128,7 +140,7 @@ def main():
                     dirname = os.path.dirname(destination)
                     if not os.path.isdir(dirname):
                         logging.debug('Creating directory %s ...', output_directory)
-                        os.makedirs(output_directory)
+                        os.makedirs(dirname)
 
                     ext = os.path.splitext(source)[1]
                     if ext.lower() in ['.flac']:
